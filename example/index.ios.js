@@ -20,7 +20,8 @@ export default class example extends Component {
           onCookiesSave={(c) => console.log('COOKIE', c)}
           source={{ uri: 'https://google.com/' }}
           onMessage={(e) => console.log(e.nativeEvent)}
-          injectedJavaScript="window.postMessage('Hello from WkWebView');"
+          onNavigationResponse={(e) => console.log(e.nativeEvent)}
+          injectedJavaScript="window.postMessage('Hello from WkWebView'); document.addEventListener('message', function(e) { alert(e.data); });"
         />
         <Text style={{ fontWeight: 'bold', padding: 10 }} onPress={() => this.webview.reload()}>Reload</Text>
         <Text style={{ fontWeight: 'bold', padding: 10 }} onPress={() => this.webview.postMessage("Hello from React Native")}>Post Message</Text>
