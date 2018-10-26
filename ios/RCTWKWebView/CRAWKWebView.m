@@ -1,4 +1,4 @@
-#import "RCTWKWebView.h"
+#import "CRAWKWebView.h"
 
 #import "WeakScriptMessageDelegate.h"
 
@@ -24,7 +24,7 @@
 }
 @end
 
-@interface RCTWKWebView () <WKNavigationDelegate, RCTAutoInsetsProtocol, WKScriptMessageHandler, WKUIDelegate, UIScrollViewDelegate>
+@interface CRAWKWebView () <WKNavigationDelegate, RCTAutoInsetsProtocol, WKScriptMessageHandler, WKUIDelegate, UIScrollViewDelegate>
 
 @property (nonatomic, copy) RCTDirectEventBlock onLoadingStart;
 @property (nonatomic, copy) RCTDirectEventBlock onLoadingFinish;
@@ -34,13 +34,14 @@
 @property (nonatomic, copy) RCTDirectEventBlock onMessage;
 @property (nonatomic, copy) RCTDirectEventBlock onCookiesSave;
 @property (nonatomic, copy) RCTDirectEventBlock onScroll;
+@property (nonatomic, copy) RCTDirectEventBlock onNavigationResponse;
 @property (assign) BOOL sendCookies;
 @property (nonatomic, strong) WKUserScript *atStartScript;
 @property (nonatomic, strong) WKUserScript *atEndScript;
 
 @end
 
-@implementation RCTWKWebView
+@implementation CRAWKWebView
 {
   WKWebView *_webView;
   BOOL _injectJavaScriptForMainFrameOnly;
@@ -139,9 +140,15 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 
 - (void)setupPostMessageScript {
   if (_messagingEnabled) {
-    NSString *source=@"window.originalPostMessage = window.postMessage; window.postMessage = function (data) { window.webkit.messageHandlers.reactNative.postMessage(data); }";
+    NSString *source = @"window.originalPostMessage = window.postMessage;"
+    "window.postMessage = function(message, targetOrigin, transfer) {"
+      "window.webkit.messageHandlers.reactNative.postMessage(message);"
+      "if (typeof targetOrigin !== 'undefined') {"
+        "window.originalPostMessage(message, targetOrigin, transfer);"
+      "}"
+    "};";
     WKUserScript *script = [[WKUserScript alloc] initWithSource:source
-                           injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
+                                                  injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                forMainFrameOnly:_injectedJavaScriptForMainFrameOnly];
     [_webView.configuration.userContentController addUserScript:script];
   }
@@ -212,7 +219,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
       Method method = class_getInstanceMethod(class, selector);
       IMP original = method_getImplementation(method);
       IMP override = imp_implementationWithBlock(^void(id me, void* arg0, BOOL arg1, BOOL arg2, BOOL arg3, id arg4) {
-          ((void (*)(id, SEL, void*, BOOL, BOOL, BOOL, id))original)(me, selector, arg0, TRUE, arg2, arg3, arg4);
+        ((void (*)(id, SEL, void*, BOOL, BOOL, BOOL, id))original)(me, selector, arg0, TRUE, arg2, arg3, arg4);
       });
       method_setImplementation(method, override);
     } else {
@@ -220,7 +227,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
       Method method = class_getInstanceMethod(class, selector);
       IMP original = method_getImplementation(method);
       IMP override = imp_implementationWithBlock(^void(id me, void* arg0, BOOL arg1, BOOL arg2, id arg3) {
-          ((void (*)(id, SEL, void*, BOOL, BOOL, id))original)(me, selector, arg0, TRUE, arg2, arg3);
+        ((void (*)(id, SEL, void*, BOOL, BOOL, id))original)(me, selector, arg0, TRUE, arg2, arg3);
       });
       method_setImplementation(method, override);
     }
@@ -274,21 +281,24 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
   [_webView evaluateJavaScript:source completionHandler:nil];
 }
 
-- (void)removeData:(NSArray *)types
+- (void)removeData:(NSArray *)types :(NSArray *)records
          completionHandler:(void (^)(id, NSError *error))completionHandler
 {
-  NSSet *websiteDataTypes;
-
-  if (types != nil) {
-    websiteDataTypes = [NSSet setWithArray:types];
-  } else {
-    websiteDataTypes = [WKWebsiteDataStore allWebsiteDataTypes];
-  }
-   NSDate *dateFrom = [NSDate dateWithTimeIntervalSince1970:0];
-  [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:websiteDataTypes modifiedSince:dateFrom completionHandler:^{
-    completionHandler(self, nil);
-  }];
+    WKWebsiteDataStore *dataStore = [WKWebsiteDataStore defaultDataStore];
+    [dataStore fetchDataRecordsOfTypes:[WKWebsiteDataStore allWebsiteDataTypes]
+     completionHandler:^(NSArray<WKWebsiteDataRecord *> * __nonnull allRecords) {
+         for (WKWebsiteDataRecord *record  in allRecords)
+         {
+             if ([records containsObject: record.displayName]) {
+                 [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:record.dataTypes forDataRecords:@[record]
+                 completionHandler:^{
+                     NSLog(@"%@ Cookies for %@ deleted successfully", records, record.displayName);
+                 }];
+               }
+         }
+     }];
 }
+
 
 - (void)goBack
 {
@@ -439,26 +449,26 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
     return;
   }
   NSDictionary *event = @{
-                        @"contentOffset": @{
-                            @"x": @(scrollView.contentOffset.x),
-                            @"y": @(scrollView.contentOffset.y)
-                            },
-                        @"contentInset": @{
-                            @"top": @(scrollView.contentInset.top),
-                            @"left": @(scrollView.contentInset.left),
-                            @"bottom": @(scrollView.contentInset.bottom),
-                            @"right": @(scrollView.contentInset.right)
-                            },
-                        @"contentSize": @{
-                            @"width": @(scrollView.contentSize.width),
-                            @"height": @(scrollView.contentSize.height)
-                            },
-                        @"layoutMeasurement": @{
-                            @"width": @(scrollView.frame.size.width),
-                            @"height": @(scrollView.frame.size.height)
-                            },
-                        @"zoomScale": @(scrollView.zoomScale ?: 1),
-                        };
+                          @"contentOffset": @{
+                              @"x": @(scrollView.contentOffset.x),
+                              @"y": @(scrollView.contentOffset.y)
+                              },
+                          @"contentInset": @{
+                              @"top": @(scrollView.contentInset.top),
+                              @"left": @(scrollView.contentInset.left),
+                              @"bottom": @(scrollView.contentInset.bottom),
+                              @"right": @(scrollView.contentInset.right)
+                              },
+                          @"contentSize": @{
+                              @"width": @(scrollView.contentSize.width),
+                              @"height": @(scrollView.contentSize.height)
+                              },
+                          @"layoutMeasurement": @{
+                              @"width": @(scrollView.frame.size.width),
+                              @"height": @(scrollView.frame.size.height)
+                              },
+                          @"zoomScale": @(scrollView.zoomScale ?: 1),
+                          };
   _onScroll(event);
 }
 
@@ -466,8 +476,8 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 
 #if DEBUG
 - (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential * _Nullable))completionHandler {
-    NSURLCredential * credential = [[NSURLCredential alloc] initWithTrust:[challenge protectionSpace].serverTrust];
-    completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
+  NSURLCredential * credential = [[NSURLCredential alloc] initWithTrust:[challenge protectionSpace].serverTrust];
+  completionHandler(NSURLSessionAuthChallengeUseCredential, credential);
 }
 #endif
 
@@ -553,37 +563,6 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
   }
 }
 
-- (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler
-{
-  if (_onCookiesSave) {
-     if (@available(iOS 11.0, *)) {  //for ios 11+
-      WKHTTPCookieStore *cookieStore = webView.configuration.websiteDataStore.httpCookieStore;
-        [cookieStore getAllCookies:^(NSArray* cookieList) {
-            if (cookieList.count > 0) {
-              NSArray *cookies = cookieList;
-              NSString * cookiesString = [[cookies valueForKey:@"description"] componentsJoinedByString:@"|"];
-              NSMutableDictionary<NSString *, id> *event = [self baseEvent];
-              [event addEntriesFromDictionary: @{
-              @"data": cookiesString
-              }];
-              _onCookiesSave(event);
-            }
-        }];
-      decisionHandler(WKNavigationResponsePolicyAllow);
-    } else {
-      NSHTTPURLResponse* response = navigationResponse.response;
-      NSArray *cookies = [NSHTTPCookie cookiesWithResponseHeaderFields:[response allHeaderFields] forURL:[NSURL URLWithString:@""]];
-      NSString * cookiesString = [[cookies valueForKey:@"description"] componentsJoinedByString:@"\n"];
-      NSMutableDictionary<NSString *, id> *event = [self baseEvent];
-        [event addEntriesFromDictionary: @{
-        @"data": cookiesString
-        }];
-        _onCookiesSave(event);
-      decisionHandler(WKNavigationResponsePolicyAllow);
-    }
-  }
-}
-
 #pragma mark - WKUIDelegate
 
 - (void)webView:(WKWebView *)webView runJavaScriptAlertPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(void))completionHandler {
@@ -647,6 +626,53 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
 {
   RCTLogWarn(@"Webview Process Terminated");
+}
+
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+  if (_onNavigationResponse) {
+    NSDictionary *headers = @{};
+    NSInteger statusCode = 200;
+    if([navigationResponse.response isKindOfClass:[NSHTTPURLResponse class]]){
+        headers = ((NSHTTPURLResponse *)navigationResponse.response).allHeaderFields;
+        statusCode = ((NSHTTPURLResponse *)navigationResponse.response).statusCode;
+    }
+
+    NSMutableDictionary<NSString *, id> *event = [self baseEvent];
+    [event addEntriesFromDictionary:@{
+                                      @"headers": headers,
+                                      @"status": [NSHTTPURLResponse localizedStringForStatusCode:statusCode],
+                                      @"statusCode": @(statusCode),
+                                      }];
+    _onNavigationResponse(event);
+  }
+
+  if (_onCookiesSave) {
+     if (@available(iOS 11.0, *)) {  //for ios 11+
+      WKHTTPCookieStore *cookieStore = webView.configuration.websiteDataStore.httpCookieStore;
+        [cookieStore getAllCookies:^(NSArray* cookieList) {
+            if (cookieList.count > 0) {
+              NSArray *cookies = cookieList;
+              NSString * cookiesString = [[cookies valueForKey:@"description"] componentsJoinedByString:@"|"];
+              NSMutableDictionary<NSString *, id> *event = [self baseEvent];
+              [event addEntriesFromDictionary: @{
+              @"data": cookiesString
+              }];
+              _onCookiesSave(event);
+            }
+        }];
+      decisionHandler(WKNavigationResponsePolicyAllow);
+    } else {
+      NSHTTPURLResponse* response = navigationResponse.response;
+      NSArray *cookies = [NSHTTPCookie cookiesWithResponseHeaderFields:[response allHeaderFields] forURL:[NSURL URLWithString:@""]];
+      NSString * cookiesString = [[cookies valueForKey:@"description"] componentsJoinedByString:@"\n"];
+      NSMutableDictionary<NSString *, id> *event = [self baseEvent];
+        [event addEntriesFromDictionary: @{
+        @"data": cookiesString
+        }];
+        _onCookiesSave(event);
+      decisionHandler(WKNavigationResponsePolicyAllow);
+    }
+  }
 }
 
 @end
