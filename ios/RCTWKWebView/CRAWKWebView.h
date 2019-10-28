@@ -10,7 +10,7 @@
  *
  *   window.location.href = RCTJSNavigationScheme + '://hello'
  */
-NSString *const RCTJSNavigationScheme = @"react-js-navigation";
+static NSString *const RCTJSNavigationScheme = @"react-js-navigation";
 
 @protocol CRAWKWebViewDelegate <NSObject>
 
